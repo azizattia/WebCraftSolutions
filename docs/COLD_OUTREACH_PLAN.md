@@ -1,113 +1,116 @@
-# Personalized Cold Outreach Plan — WebCraft Solutions
+# Personalized Concept Outreach — Plan
 
-**Goal:** turn the scraped leads in the super-admin into booked calls by sending each business a
-1-page PDF with a website concept designed for *them*, then following up.
-**Target KPIs:** ≥95% deliverability · 40–60% open · 5–10% reply · 1–3% booked calls.
+**Repo:** `azizattia/WebCraftSolutionsIT` (outreach engine + super-admin) · **Site:** wecraftsolution.com
+**Goal:** for each good lead, send a **1-page PDF showing a website concept built for *their* business
+(≥3 images)** and turn replies into booked calls.
+**Targets:** ≥95% delivered · 5–10% reply · 1–3% booked calls · first client within 30 days.
 
 ---
 
-## 1. Pipeline at a glance
+## 1. What already exists (reuse, don't rebuild)
+
+| Need | Already in the repo |
+|---|---|
+| Scrape businesses | `src/scraper.js`, `apify-pool.js`, `apify-budget.js`, `config/targets.js` (Google Maps via Apify, Montreal targets) |
+| Find more emails | `src/enrich.js` (fast), `src/enrich-deep.js` (Playwright, local), `scripts/find-emails.js`, `hunt.js` |
+| Judge their website | `src/website-audit.js` (no mobile layout, outdated, etc. → score + checkable issues) |
+| Personal first line | `src/personalize.js` (Gemini hook + subject per lead) |
+| Send safely | `pipeline.js` batches, `outreach-guard.js` (domain check + daily cap), CASL unsubscribe + open/click tracking (`server/routes/track.js`) |
+| Catch replies | `src/reply-watch.js` reads the **Outlook** inbox over IMAP → marks lead "replied" |
+| Branded PDFs | `src/blueprint-pdf.js` (PDFKit, works on Vercel) |
+| Super-admin | `portal/admin.*`, `server/routes/leads.js`, `leadfinder.js`, `cron.js` |
+
+**Missing:** the per-lead **concept PDF with images**, a **hosted concept page**, and an admin
+**review step** for them. That is the whole build.
+
+## 2. The flow
 
 ```
-Super-admin leads ─┐
-Apify scrapers ────┴─► Enrich & verify ─► Score & pick ─► Generate PDF + page ─► Send & follow up ─► Track in super-admin
+Leads (Firestore) ─► enrich + audit ─► score ─► Concept brief (Gemini) ─► 3 images ─► 1-page PDF
+                                                                                   │
+                     Admin review (approve / edit / skip) ◄────────────────────────┘
+                                   │
+            Email with link to /concept/{token} ─► follow-ups ─► reply (Outlook) ─► call ─► won
 ```
 
-| Step | Tool | Output |
-|---|---|---|
-| 1. Collect | Existing scraped emails + Apify **Google Maps Scraper** (`compass/crawler-google-places`) by niche + city | name, category, phone, website, rating, reviews |
-| 2. Enrich | Apify **Website Content Crawler** + **Contact Details Scraper** on each site | services, about text, logo, colors, photos, socials, extra emails |
-| 3. Verify | MillionVerifier / NeverBounce (or Apify email-validator actor) | drop invalid, catch-all flagged |
-| 4. Score | Simple rules (below) | top 20–30 leads/day |
-| 5. Create | LLM brief + HTML template → Playwright → PDF (1 page, 3+ images) | `lead-slug.pdf` + hosted preview page |
-| 6. Send | Business mailbox, 3-step sequence | tracked sends, replies |
-| 7. Track | New `outreach` status fields in super-admin | pipeline view: sent → opened → replied → call → won |
+## 3. Who gets a concept (effort only where it pays)
 
-## 2. Who to target (lead scoring)
+A concept costs time and API credits, so only generate for leads that score high:
+- **+3** audit finds real problems (no mobile layout, very old, broken) or **no website**
+- **+2** Google rating ≥ 4.2 with 20+ reviews (they earn money and care about image)
+- **+2** high-value niche: clinics, dentists, lawyers, real estate, contractors, spas, gyms
+- **+1** owner/manager email (not a generic `info@` address) · **+1** active Instagram/Facebook
+- **Skip:** chains, franchises, already-modern sites, anyone on the unsubscribe list
 
-Score 0–10, send to the highest first:
-- **+3** no website, or site not mobile-friendly / broken / >5s load (check with PageSpeed API)
-- **+2** good Google rating (4.2+) and 20+ reviews → they have money and care about reputation
-- **+2** high-value niche: clinics, dentists, lawyers, real estate, restaurants, gyms, salons, contractors
-- **+1** active on Instagram/Facebook but weak site
-- **+1** personal email found (owner/manager) instead of `info@`
-- **−5** big chain / franchise / already a modern site
+Start with **one niche in Montreal**, send **20–30 concepts a day**, measure, then expand.
 
-Start with **one niche + one city** (e.g. dentists in Tunis) so templates and images can be reused and
-the offer sounds specialized.
+## 4. The 1-page PDF
 
-## 3. The 1-page PDF (the “wow” asset)
+New module `src/concept-pdf.js` (PDFKit, same style as `blueprint-pdf.js`), A4 portrait:
 
-Generated automatically per lead from an HTML template (A4, rendered with Playwright `page.pdf()`):
+1. **Header:** their name + “Un nouveau site pour {Business} / A new website for {Business}”
+2. **Image 1 – Desktop hero:** new homepage in their colors, with their services and photos
+3. **Image 2 – Mobile view:** same design on a phone (where most of their clients browse)
+4. **Image 3 – Before / after:** their current site (or Google listing) beside the concept
+5. **3 bullets for them**, from crawled content + audit, e.g. “Online booking for your 4 services”,
+   “Your 4.7★ from 120 reviews on the homepage”, “French/English”
+6. **Offer + CTA:** matching package from the admin Offers, price range, QR code to book 15 min
 
-1. **Header:** their logo/name + “A new website concept for *{Business}*”
-2. **Image 1 — Hero mockup:** desktop homepage using *their* colors, photos and services (HTML
-   mockup screenshotted in a laptop frame).
-3. **Image 2 — Mobile mockup:** same design on a phone frame (most of their customers are mobile).
-4. **Image 3 — Before / after:** screenshot of their current site (or Google listing if none) vs. the
-   new concept.
-5. **3 bullets tailored to them** (from the crawled content), e.g. “Online booking for your 4
-   services”, “Show your 4.7★ from 120 reviews”, “Arabic / French / English”.
-6. **Offer + CTA:** matching package from the super-admin *Offers* section, price anchor, QR code +
-   link to book a 15-min call.
+**Making the images (`src/concept-images.js`):**
+- **Mockups (recommended):** fill 3–4 niche HTML templates with their logo, colors, text and
+  photos, then screenshot desktop + mobile with Playwright. Run locally, like `enrich-deep.js`
+  (Chromium is too heavy for Vercel), and upload PNGs to Firebase Storage.
+- **Fallback:** Gemini image model (key already set up) for hero backgrounds when they have no
+  usable photos.
+- **Before shot:** Playwright screenshot of their current site.
 
-Images come from HTML mockups first (fast, accurate branding); use an image model only for hero
-backgrounds when the business has no usable photos. **Manually review every PDF before it goes out**
-for the first 2 weeks.
+**Check every PDF by hand for the first 2 weeks.** One wrong logo or name costs the lead.
 
-## 4. Sending — deliverability first
+## 5. Sending (deliverability first)
 
-- **Don’t blast from `webcraftsolutionsit@outlook.com`.** Consumer Outlook.com accounts have low
-  daily limits and Microsoft suspends accounts for bulk unsolicited mail. Use it for replies/inbound,
-  and send from a mailbox on the domain, e.g. `aziz@wecraftsolution.com` (Microsoft 365 / Zoho /
-  Google Workspace), ideally on a secondary domain (e.g. `wecraftsolution.co`) to protect the main one.
-- Set up **SPF, DKIM, DMARC**; warm up 2–3 weeks; start at **10–15/day**, grow to 30–40/day per inbox.
-- **First email: no attachment**, 1 link max. Link to a hosted preview
-  (`wecraftsolution.com/concept/{slug}`) that shows the PDF + download button. This avoids spam
-  filters *and* tells you who viewed it. Attach the PDF only when they reply.
-- Plain text, short, personal. Always include business address + one-line opt-out; honor it
-  immediately (CAN-SPAM / GDPR / local law).
+- **Send from the authenticated domain** (`FROM_EMAIL` on wecraftsolution.com via Brevo/SMTP,
+  already enforced by `outreach-guard.js`). **Keep `webcraftsolutionsit@outlook.com` as `REPLY_TO`**
+  and IMAP inbox for `reply-watch.js`. Don’t send bulk mail from it: free Outlook.com has low
+  limits and Microsoft suspends accounts that send bulk unsolicited mail.
+- **First email has no attachment**, just one link to `wecraftsolution.com/concept/{signed-token}`,
+  which shows the images and a PDF download. Attachments hurt deliverability, and this page tells
+  you who looked. Log a `concept_viewed` event through the existing tracking.
+- Set `DAILY_SEND_CAP` to 20 in week 1, 50 in week 2, then 100 or more.
+- **French first for Quebec leads** (English as a fallback). Keep the CASL footer and unsubscribe link.
 
-## 5. Sequence (3 touches, 10 days)
+## 6. Email sequence (reuse the pipeline’s follow-ups)
 
-**Day 0 — Subject:** `Quick website idea for {Business}`
-> Hi {FirstName}, I came across {Business} on Google Maps — {specific compliment, e.g. 4.8★ from 90
-> reviews}. I noticed {specific issue: no site / site hard to use on mobile / no online booking}.
-> I sketched a free concept of what your site could look like: {preview link}.
-> Worth a 15-minute call this week? — Aziz, WebCraft Solutions
+- **Day 0:** “J’ai préparé une idée de site pour {Business}”. Gemini hook + one issue from the audit +
+  concept link + “15 min cette semaine?”
+- **Day 3:** reply in the same thread with the mobile image inline
+- **Day 8:** short close: “Je ferme votre dossier? Le concept reste à vous.”
+- **Reply:** `reply-watch` stops the sequence. Answer within 24h, attach the PDF, book the call.
+  Follow up with the estimator/blueprint flow you already have.
 
-**Day 3 — Reply in thread:** one new benefit + mobile screenshot inline (“most of your clients will
-see it like this”).
-**Day 10 — Break-up:** “Should I close your file? Happy to send the concept files either way.”
+## 7. Build steps (in order)
 
-Reply → move to call within 24h, send full PDF + matching super-admin offer.
+1. `concept-brief.js`: Gemini turns crawl + audit + category into JSON (palette, sections, 3 bullets, headline)
+2. `concept-images.js` + 3–4 niche HTML templates, rendered locally, saved to Storage
+3. `concept-pdf.js` (PDFKit) + tests (`node:test`, like `blueprint-pdf.test.js`)
+4. Public route `/concept/:token` (signed like `track.js`) with image gallery and PDF download
+5. Admin: **“Generate concept”** button on a lead, a **Concepts** review queue, and a **“Send with concept”** action
+6. New template `templates/concept.txt` (FR + EN); add `concept_viewed` to the admin funnel
+7. Script: `npm run concepts -- --niche dentists --limit 30` runs the local batch
 
-## 6. Build in this codebase (super-admin)
-
-1. **Leads table:** add `website_score`, `lead_score`, `enrichment_json`, `pdf_url`, `status`,
-   `last_contacted_at`, `opt_out`.
-2. **“Enrich” button / cron:** calls the Apify API (token in env), stores results.
-3. **“Generate concept” button:** LLM writes the brief + bullets → fills HTML template →
-   Playwright renders mockups + PDF → uploads to storage → creates `/concept/{slug}` page.
-4. **Review queue:** approve/edit each PDF + email before sending.
-5. **Send:** SMTP/Graph API from the domain mailbox with rate limit, auto-stop sequence on reply.
-6. **Dashboard:** funnel counts and reply rate per niche/city/subject line.
-
-## 7. Timeline & budget
+## 8. Timeline and cost
 
 | Week | Work |
 |---|---|
-| 1 | Domain mailbox + DNS + warm-up start; Apify scrape 1 niche/city; lead scoring |
-| 2 | PDF/mockup template + generator; `/concept/{slug}` page; review queue |
-| 3 | First 10–15 sends/day, manual review; measure |
-| 4+ | A/B test subject + niche, scale to 30–40/day/inbox, add a 2nd inbox if results hold |
+| 1 | Steps 1–3, pick a niche, scrape and enrich 200 leads |
+| 2 | Steps 4–7, review 30 concepts by hand, start sending 20/day |
+| 3–4 | Measure; test subject lines and niches; scale to 50–100/day |
 
-**Monthly cost (approx.):** Apify $49 · email verification ~$10–20 · domain mailbox ~$6 ·
-warm-up tool ~$15–30 · LLM/image API ~$10–30 → **≈ $100/month**. One closed website pays for months.
+**Monthly cost:** Apify ~$49 · Gemini ~$0–20 · Brevo free→$25 · email verification ~$10 → **under $100**.
+One website sale pays for it many times over.
 
-## 8. Rules for best ROI
+## 9. Rules for the best return
 
-- Quality over volume: 20 great personalized emails beat 500 generic ones.
-- Lead with *their* problem and a visual, not with your services list.
-- Measure weekly; kill niches with <3% reply after 100 sends, double down on winners.
-- Ask every client for a review/referral and add finished projects to the PDF as social proof.
+- Quality over volume: 20 concepts that look like *their* business beat 500 generic emails.
+- Open with their problem and a picture, not a list of services.
+- Every week, drop niches with under 3% replies after 100 sends and put more into the ones that work.
+- Add each finished client site to the templates and PDFs as proof.
